@@ -113,6 +113,10 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 		if self._settings.get_boolean(["mmf_print_complete"]) == False and self._settings.get_boolean(["mmf_print_cancelled"]) == False:
 			self._current_action_code = "000"
 
+		if not self._settings.get_boolean(["registration_complete"]):
+			printInfo = dict(manufacturer = "Anet",model = "anet-a8")
+			self._on_regist_printer(printInfo)
+
 		if self._settings.get_boolean(["registration_complete"]):
 			self.mqtt_connect()
 		else:
@@ -146,12 +150,8 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 	def get_api_commands(self):
 		return dict(register_printer=["manufacturer","model"],forget_printer=[],mmf_print_complete=[])
 
-	def on_api_command(self, command, data):
-		if not user_permission.can():
-			return flask.make_response("Insufficient rights", 403)
-
-		if command == "register_printer":
-			# Generate serial number if it doesn't already exist.
+	def _on_regist_printer(self , data):
+    		# Generate serial number if it doesn't already exist.
 			if self._settings.get(["printer_serial_number"]) == "":
 				import uuid
 				# MMF_UUID = str(uuid.uuid4())
@@ -159,7 +159,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 				self._settings.set(["printer_serial_number"],MMF_UUID)
 			# Make API call to AiPrintBox to generate QR code and register printer.
-			url = "https://www.AiPrintBox.com/api/v2/printer"
+			url = "https://www.MyMinifactory.com/api/v2/printer"
 			mac_address = ':'.join(("%012X" % get_mac())[i:i+2] for i in range(0, 12, 2))
 			payload = "{\"manufacturer\": \"%s\",\"model\": \"%s\",\"firmware_version\": \"%s\",\"serial_number\": \"%s\",\"mac_address\": \"%s\"}" % (data["manufacturer"],data["model"],"1.0.0",self._settings.get(["printer_serial_number"]),mac_address)
 			headers = {'X-Api-Key' : self._settings.get(["client_key"]),'Content-Type' : "application/json"}
@@ -181,9 +181,16 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 					self.on_after_startup()
 				self._plugin_manager.send_plugin_message(self._identifier, dict(qr_image_url=serialized_response["qr_image_url"],printer_serial_number=self._settings.get(["printer_serial_number"])))
 			else:
-				self._logger.debug("API Error: %s" % response)
+				self._logger.info("API Error: %s" % response)
 				self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
-				
+
+	def on_api_command(self, command, data):
+		if not user_permission.can():
+			return flask.make_response("Insufficient rights", 403)
+
+		if command == "register_printer":			
+			self._on_regist_printer(data)	
+
 		if command == "forget_printer":
 			#new_supported_printers = self.get_supported_printers()
 			self.mqtt_disconnect(force=True)
@@ -204,7 +211,6 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			return flask.jsonify(bed_cleared=True)
 
 	##~~ PrinterCallback
-
 	def on_printer_add_temperature(self, data):
 		if self._settings.get_boolean(["registration_complete"]):
 			#self._logger.info("add temperature %s" % data)
@@ -214,9 +220,8 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				self._current_temp_bed = data["bed"]["actual"]
 
 	##~~ AiPrintBox Functions
-
 	def get_supported_printers(self):
-		url = "https://www.AiPrintBox.com/api/v2/printers?automatic_slicing=1&per_page=-1"
+		url = "https://www.MyMinifactory.com/api/v2/printers?automatic_slicing=1&per_page=-1"
 		headers = {'X-Api-Key': self._settings.get(["client_key"])}
 		response = requests.get(url, headers=headers)
 		if response.status_code == 200:
@@ -262,10 +267,9 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 		return timestamp
 
 	##~~ Printer Action Functions
-
 	def download_file(self, action):
 		# Make API call to AiPrintBox to download gcode file.
-		url = "https://www.AiPrintBox.com/api/v2/print-file"
+		url = "https://www.MyMinifactory.com/api/v2/print-file"
 		payload = dict(task_id = action["task_id"],printer_token = self._settings.get(["printer_token"]))
 		headers = {'X-Api-Key': self._settings.get(["client_key"])}
 		self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
@@ -298,7 +302,6 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
 
 	##~~ MQTT Functions
-
 	def mqtt_connect(self):
 		# broker_url = "mqtt.AiPrintBox.com"
 		# broker_username = self._settings.get(["client_name"])
@@ -404,41 +407,6 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			self._logger.info("subscription message error:" + str(e))
 			self._plugin_manager.send_plugin_message(self._identifier, dict(error=str(e)))
 
-# 	def _on_mqtt_subscription(self, topic, message, retained=None, qos=None, *args, **kwargs):
-# 		self._logger.info("received print message %s" % message)
-
-# 		action = json.loads(message)
-# 		if action["action_code"] == "100":
-# 			self._logger.debug("received prepare command")
-
-# 		if action["action_code"] == "101":
-# 			self._logger.debug("received print command")
-# 			# self._current_action_code = "101"
-# 			self._current_task_id = action["task_id"]
-# 			self.download_file(action)
-
-# 		if action["action_code"] == "102":
-# 			self._logger.info("received pause command")
-# 			# self._current_action_code = "102"
-# #			if self._current_task_id:
-# 			self._printer.pause_print()
-
-# 		if action["action_code"] == "103":
-# 			self._logger.info("received cancel command")
-# 			# self._current_action_code = "103"
-# #			if self._current_task_id:
-# 			self._printer.cancel_print()
-
-# 		if action["action_code"] == "104":
-# 			self._logger.info("received resume command")
-# 			# self._current_action_code = "104"
-# #			if self._current_task_id:
-# 			self._printer.resume_print()
-
-# 		if action["action_code"] == "300":
-# 			self._logger.debug("received status update request")
-# 			self.on_after_startup()
-
 	def _on_mqtt_connect(self, client, userdata, flags, rc):
 		if not client == self._mqtt:
 			return
@@ -499,7 +467,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				user="jneilliii",
 				repo="OctoPrint-AiPrintBox",
 				current=self._plugin_version,
-				pip="https://github.com/jneilliii/OctoPrint-AiPrintBox/archive/{target_version}.zip"
+				pip="https://github.com/springtiger/aiprintbox/archive/{target_version}.zip"				
 			)
 		)
 
