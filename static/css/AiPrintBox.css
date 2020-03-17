@@ -1,0 +1,9 @@
+div.aiprintbox_logo {
+	background-image: url(/plugin/aiprintbox/static/images/aiprintbox_logo_128.png);
+    background-size: contain;
+    vertical-align: middle;
+    background-repeat: no-repeat;
+	float: left;
+	width: 24px;
+	height: 20px;
+}
