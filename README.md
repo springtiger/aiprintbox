@@ -9,6 +9,4 @@ manually using this URL:
 Support My Efforts
 I, springtiger, programmed this plugin for fun and do my best effort to support those that have issues with it, please return the favor and leave me a tip if you find this plugin helpful.
 
-
-### ¾èÔù
-![Ö§¸¶±¦](./alipay.png)
+![AliPay](./alipay.png)
