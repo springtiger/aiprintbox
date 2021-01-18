@@ -14,6 +14,8 @@ import json
 import time
 import octoprint.plugin
 import base64
+import trimesh
+import os
 
 class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 						  octoprint.plugin.EventHandlerPlugin,
@@ -29,6 +31,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 		self._mqtt_connected = False
 		self._mqtt_tls_set = False
 		self._current_task_id = None
+		self.server_host = "http://139.159.151.243:8080/fileoperation/"
 		self.mmf_status_updater = None
 		self._current_action_code = "999"
 		self._current_temp_hotend = 0
@@ -49,12 +52,13 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 	def get_settings_defaults(self):
 		return dict(
-			supported_printers = [],
-			printer_manufacturer = "Anet",
-			printer_model = "anet-a8",
+			supported_printers = [],			
+			printer_manufacturer = "CARS",
+			printer_model = "CARS-C8",
 			printer_serial_number = "",
 			printer_firmware_version = "",
 			registration_complete = False,
+			active_complete = False,
 			printer_token = "",
 			client_name = "octoprint_AiPrintBox",
 			client_key = "acGxgLJmvgTZU2RDZ3vQaiitxc5Bf6DDeHL1", #"b4943605-52b5-4d13-94ee-34eb983a813f"
@@ -73,37 +77,41 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 	##~~ EventHandlerPlugin API
 
 	def on_event(self, event, payload):
-		if event == Events.PRINT_STARTED:
-			self._current_action_code = "101"
-			self._settings.set_boolean(["mmf_print_complete"],False)
-			self._settings.set_boolean(["mmf_print_cancelled"],False)
-			self._settings.save()
-			if not self._mmf_print:
-				self._current_task_id = None
-		elif event == Events.PRINT_DONE:
-			if self._mmf_print and not self._settings.get_boolean(["bypass_bed_clear"]): # Send message back to UI to confirm clearing of bed.
-				self._settings.set_boolean(["mmf_print_complete"],True)
+		try:
+			if event == Events.PRINT_STARTED:
+				self._current_action_code = "101"
+				self._settings.set_boolean(["mmf_print_complete"],False)
+				self._settings.set_boolean(["mmf_print_cancelled"],False)
 				self._settings.save()
-				self._plugin_manager.send_plugin_message(self._identifier, dict(mmf_print_complete=True))
-			else:
-				# self._current_action_code = "000"
-				self._mmf_print = False
-			self._current_action_code = "000"
-		elif event == Events.PRINT_CANCELLED:
-			if self._mmf_print and not self._settings.get_boolean(["bypass_bed_clear"]): # Send message back to UI to confirm clearing of bed.
-				self._settings.set_boolean(["mmf_print_cancelled"],True)
-				self._settings.save()
-				self._plugin_manager.send_plugin_message(self._identifier, dict(mmf_print_cancelled=True))
-			else:
-				# self._current_action_code = "000"
-				self._mmf_print = False
-			self._current_action_code = "000"
-		if event == Events.PRINT_PAUSED:
-			self._current_action_code = "102"
-			# self._current_action_code = "101"
-		if event == Events.PRINT_RESUMED:
-			self._current_action_code = "103"
-			# self._current_action_code = "101"
+				if not self._mmf_print:
+					self._current_task_id = None
+			elif event == Events.PRINT_DONE:
+				if self._mmf_print and not self._settings.get_boolean(["bypass_bed_clear"]): # Send message back to UI to confirm clearing of bed.
+					self._settings.set_boolean(["mmf_print_complete"],True)
+					self._settings.save()
+					self._plugin_manager.send_plugin_message(self._identifier, dict(mmf_print_complete=True))
+				else:
+					# self._current_action_code = "000"
+					self._mmf_print = False
+				self._current_action_code = "000"
+			elif event == Events.PRINT_CANCELLED:
+				if self._mmf_print and not self._settings.get_boolean(["bypass_bed_clear"]): # Send message back to UI to confirm clearing of bed.
+					self._settings.set_boolean(["mmf_print_cancelled"],True)
+					self._settings.save()
+					self._plugin_manager.send_plugin_message(self._identifier, dict(mmf_print_cancelled=True))
+				else:
+					# self._current_action_code = "000"
+					self._mmf_print = False
+				self._current_action_code = "000"
+			if event == Events.PRINT_PAUSED:
+				self._current_action_code = "102"
+				# self._current_action_code = "101"
+			if event == Events.PRINT_RESUMED:
+				self._current_action_code = "103"
+				# self._current_action_code = "101"
+		except Exception as e:
+			self._logger.info("on event error:" + str(e))
+			self._plugin_manager.send_plugin_message(self._identifier,dict(error=str(e)))
 
 	##~~ StartupPlugin mixin
 
@@ -114,19 +122,23 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			self._current_action_code = "000"
 
 		if not self._settings.get_boolean(["registration_complete"]):
-			printInfo = dict(manufacturer = "Anet",model = "anet-a8")
+			printInfo = dict(manufacturer = "CARS",model = "CARS-C8")
 			self._on_regist_printer(printInfo)
 
 		if self._settings.get_boolean(["registration_complete"]):
+			self._on_active_printer()
+
+		if self._settings.get_boolean(["active_complete"]):			
 			self.mqtt_connect()
+			self.on_after_startup()
 		else:
 			self._settings.set(["supported_printers"],self.get_supported_printers())
-
+		
 	def on_after_startup(self):
 		if self._mqtt is None:
 			return
 
-		if self._settings.get_boolean(["registration_complete"]):
+		if self._settings.get_boolean(["active_complete"]):
 			# start repeated timer publishing current status_code
 			self.mmf_status_updater = RepeatedTimer(5,self.send_status)
 			self.mmf_status_updater.start()
@@ -151,15 +163,16 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 		return dict(register_printer=["manufacturer","model"],forget_printer=[],mmf_print_complete=[])
 
 	def _on_regist_printer(self , data):
+		try:
     		# Generate serial number if it doesn't already exist.
 			if self._settings.get(["printer_serial_number"]) == "":
 				import uuid
-				# MMF_UUID = str(uuid.uuid4())
-				MMF_UUID = "2576c5ea-78c9-44b0-ab56-3ebd88cc4ac0"	
+				MMF_UUID = str(uuid.uuid4())
+				#MMF_UUID = "2576c5ea-78c9-44b0-ab56-3ebd88cc4ac0"	
 
 				self._settings.set(["printer_serial_number"],MMF_UUID)
 			# Make API call to AiPrintBox to generate QR code and register printer.
-			url = "https://www.MyMinifactory.com/api/v2/printer"
+			url = "%sprinterInfo/registerPrinterInfo?printerCode=%s&manufactor=%s&type=%s" % (self.server_host, self._settings.get(["printer_serial_number"]),data["manufacturer"],data["model"])
 			mac_address = ':'.join(("%012X" % get_mac())[i:i+2] for i in range(0, 12, 2))
 			payload = "{\"manufacturer\": \"%s\",\"model\": \"%s\",\"firmware_version\": \"%s\",\"serial_number\": \"%s\",\"mac_address\": \"%s\"}" % (data["manufacturer"],data["model"],"1.0.0",self._settings.get(["printer_serial_number"]),mac_address)
 			headers = {'X-Api-Key' : self._settings.get(["client_key"]),'Content-Type' : "application/json"}
@@ -169,20 +182,49 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			if response.status_code == 200:
 				serialized_response = json.loads(response.text)
 				self._logger.debug(json.dumps(serialized_response))
-				if serialized_response["printer_token"] != self._settings.get(["printer_token"]):
-					self.mqtt_disconnect(force=True)
-					self._settings.set(["printer_token"],serialized_response["printer_token"])
-					self._settings.set(["printer_manufacturer"],data["manufacturer"])
-					self._settings.set(["printer_model"],data["model"])
-					self._settings.set(["printer_identifier"], self._identifier)
-					self._settings.set_boolean(["registration_complete"], True)					
-					self._settings.save()
-					self.mqtt_connect()
-					self.on_after_startup()
-				self._plugin_manager.send_plugin_message(self._identifier, dict(qr_image_url=serialized_response["qr_image_url"],printer_serial_number=self._settings.get(["printer_serial_number"])))
+				self._settings.set(["printer_manufacturer"],data["manufacturer"])
+				self._settings.set(["printer_model"],data["model"])
+				self._settings.set(["printer_identifier"], self._identifier)
+				self._settings.set_boolean(["registration_complete"], True)					
+				self._settings.save()
 			else:
 				self._logger.info("API Error: %s" % response)
 				self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
+		except Exception as e:
+			self._logger.info("regist printer error:" + str(e))
+			self._plugin_manager.send_plugin_message(self._identifier,dict(error=str(e)))
+
+	def _on_active_printer(self):
+		try:
+			serial_number = self._settings.get(["printer_serial_number"])
+			if serial_number == "":
+				self._plugin_manager.send_plugin_message(self._identifier, dict(error="The machine is not registered"))
+				return
+			url = "%sprinterInfo/findPrinterInfoTokenIdByPrinterCode?printerCode=%s" % (self.server_host, serial_number)
+			payload = {}
+			headers = {'X-Api-Key' : self._settings.get(["client_key"]),'Content-Type' : "application/json"}
+			self._logger.debug("Sending data: %s with header: %s" % (payload,json.dumps(headers)))
+			response = requests.get(url, data=payload, headers=headers)
+
+			if response.status_code == 200:
+				serialized_response = json.loads(response.text)
+				self._logger.debug(json.dumps(serialized_response))
+				if serialized_response["data"] != "":
+					self.mqtt_disconnect(force=True)
+					self._settings.set(["printer_token"],serialized_response["data"])
+					self._settings.set_boolean(["active_complete"], True)					
+					self._settings.save()
+#					self.mqtt_connect()
+#					self.on_after_startup()
+				else:
+					self._settings.set_boolean(["active_complete"], False)	
+			else:
+				self._settings.set_boolean(["active_complete"], False)	
+#			self._plugin_manager.send_plugin_message(self._identifier, dict(qr_image_url=serialized_response["qr_image_url"],printer_serial_number=self._settings.get(["printer_serial_number"])))
+			self._plugin_manager.send_plugin_message(self._identifier, dict(printer_serial_number=self._settings.get(["printer_serial_number"])))
+		except Exception as e:
+			self._logger.info("active printer error: " + str(e))
+			self._plugin_manager.send_plugin_message(self._identifier,dict(error=str(e)))
 
 	def on_api_command(self, command, data):
 		if not user_permission.can():
@@ -212,7 +254,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 	##~~ PrinterCallback
 	def on_printer_add_temperature(self, data):
-		if self._settings.get_boolean(["registration_complete"]):
+		if self._settings.get_boolean(["active_complete"]):
 			#self._logger.info("add temperature %s" % data)
 			if data.get("tool0"):
 				self._current_temp_hotend = data["tool0"]["actual"]
@@ -221,12 +263,11 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 	##~~ AiPrintBox Functions
 	def get_supported_printers(self):
-		url = "https://www.MyMinifactory.com/api/v2/printers?automatic_slicing=1&per_page=-1"
+		url = "%sprinterInfo/supportedPrinters" % (self.server_host)
 		headers = {'X-Api-Key': self._settings.get(["client_key"])}
 		response = requests.get(url, headers=headers)
 		if response.status_code == 200:
 			self._logger.debug("Received printers: %s" % response.text)
-			#filtered_printers = list(filter(lambda d: (d['model'] and d['automatic_slicing'] == 1), json.loads(response.text)["items"]))
 			filtered_printers = json.loads(response.text)["items"]
 			return filtered_printers
 		else:
@@ -267,49 +308,59 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 		return timestamp
 
 	##~~ Printer Action Functions
-	def download_file(self, action):
-		# Make API call to AiPrintBox to download gcode file.
-		url = "https://www.MyMinifactory.com/api/v2/print-file"
-		payload = dict(task_id = action["task_id"],printer_token = self._settings.get(["printer_token"]))
-		headers = {'X-Api-Key': self._settings.get(["client_key"])}
-		self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
-		response = requests.get(url, params=payload, headers=headers)
+	def _download_file(self, data):
+		try:
+			# Make API call to AiPrintBox to download gcode file.
+	#		payload = dict(file_id = action["file_id"],printer_token = self._settings.get(["printer_token"]))
+			action = json.loads(data)
+#			url = action["url"]
+			url = action["filePath"]
+			payload = "{\"Api-Key\": \"%s\"}" % action["key"]
+			headers = {'X-Api-Key': self._settings.get(["client_key"])}
+			fileName = action["fileName"]
 
-		if response.status_code == 200:
-			# Save file to uploads folder
-			gcode_file_name = self._file_manager.sanitize_name("local",action["filename"])
-			gcode_download_file = "%s/%s" % (self._settings.global_get_basefolder("uploads"),gcode_file_name)
-			self._logger.debug("Saving file: %s" % gcode_download_file)
-			with open(gcode_download_file, 'w') as f:
-				f.write(response.text)
-				
-			# Add downloaded file to analysisqueue
-			printer_profile = self._printer_profile_manager.get("_default")
-			if version.get_octoprint_version() > version.get_comparable_version("1.3.9"):
-				entry = QueueEntry(gcode_file_name,gcode_download_file,"gcode","local",gcode_download_file, printer_profile, None)
+			self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
+#			if action["Request-Type"] == "get":
+			if action["type"] == "get":		
+				response = requests.get(url, params=payload, headers=headers)
 			else:
-				entry = QueueEntry(gcode_file_name,gcode_download_file,"gcode","local",gcode_download_file, printer_profile)
-			self._analysis_queue.enqueue(entry,high_priority=True) 
+				response = requests.post(url, params=payload, headers=headers)
 
-			# Select file downloaded and start printing if auto_start_print is enabled and not already printing
-			if self._printer.is_ready():
-				self._mmf_print = True
-				self._printer.select_file(gcode_file_name, False, printAfterSelect=self._settings.get_boolean(["auto_start_print"]))
+			if response.status_code == 200:
+				# Save file to uploads folder
+				sanitize_file_name = self._file_manager.sanitize_name("local",fileName)
+				download_file = "%s/%s" % (self._settings.global_get_basefolder("uploads"),sanitize_file_name)
+				self._logger.debug("Saving file: %s" % download_file)
+
+				with open(download_file, 'w') as f:
+					f.write(response.text)
+					f.close()
+
+				if download_file.endswith(".obj"):					
+					mesh = trimesh.load_mesh(download_file)
+					stl_download_file = download_file.replace(".obj",".stl")
+					mesh.export(stl_download_file,"stl_ascii")
+					os.remove(download_file)
+
+				return dict(status_code = response.status_code,text = "File download successful.")
 			else:
-				self._logger.debug("Printer not ready, not selecting file to print.")
-		else:
-			self._logger.debug("API Error: %s" % response)
-			self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
-
+				self._logger.debug("API Error: %s" % response)
+				self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
+				return dict(status_code = response.status_code,text = response.text)
+			
+		except Exception as e:
+			self._logger.info("download file error :"+ str(e))
+			self._plugin_manager.send_plugin_message(self._identifier,dict(error = str(e)))
+		return dict(status_code = 400,text = str(e))
 	##~~ MQTT Functions
 	def mqtt_connect(self):
 		# broker_url = "mqtt.AiPrintBox.com"
 		# broker_username = self._settings.get(["client_name"])
 		# broker_password = self._settings.get(["client_key"])
 
-		broker_url = "139.159.194.55"
-		broker_username = "anet"
-		broker_password = "anet3d.com"
+		broker_url = "139.159.151.243"
+		broker_username = "cars"
+		broker_password = "cars"
 
 		# broker_insecure_port = 1883
 		broker_insecure_port = 5059
@@ -383,7 +434,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			restapi = action["act_restapi"]
 			url = "http://%s:%s/api/%s" % (address,port,restapi)
 
-			self._logger.debug("Received from " + topic + "|" + message)
+			self._logger.debug("Received from " + topic + "|" + str(message))
 
 			# content_type = base64.b64decode(action["act_content-type"]).encode("utf-8")
 			content_type = action["act_content-type"]
@@ -393,7 +444,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 			pub_topic = "/printers/%s/client" % self._settings.get(["printer_token"])
 			if action["act_type"] == "post":
-				data = base64.b64decode(action["act_cmd"]).encode("utf-8")
+				data = base64.b64decode(action["act_cmd"])
 				r = requests.post(url, data=data, headers=headers)
 				self.mqtt_publish("%s/%s/status" % (pub_topic,restapi), r.status_code)
 				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi), r.text)
@@ -403,9 +454,19 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				self.mqtt_publish("%s/%s/status" % (pub_topic,restapi), r.status_code)
 				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi), r.text)
 				self._plugin_manager.send_plugin_message(self._identifier, dict(topic=restapi,message=message,subscribecommand="Response: %s" % r.text))
-		except Exception, e:
+			if action["act_type"] == "download":
+				data = base64.b64decode(action["act_cmd"])		
+				r = self._download_file(data)
+				#data = base64.b64decode(action["act_cmd"]).encode("utf-8")			
+				#r = requests.post(url, data=data, headers=headers)
+				self.mqtt_publish("%s/%s/status" % (pub_topic,restapi), r["status_code"])
+				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi), r["text"])
+				self._plugin_manager.send_plugin_message(self._identifier, dict(topic=restapi,message=message,subscribecommand="Status code: %s" % r["status_code"]))
+
+
+		except Exception as e:
 			self._logger.info("subscription message error:" + str(e))
-			self._plugin_manager.send_plugin_message(self._identifier, dict(error=str(e)))
+			self._plugin_manager.send_plugin_message(self._identifier, dict(message=str(e)))
 
 	def _on_mqtt_connect(self, client, userdata, flags, rc):
 		if not client == self._mqtt:
@@ -426,13 +487,13 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			else:
 				reason = None
 
-			self._logger.error(reason if reason else "Connection to AiPrintBox broker refused, unknown error")
+			self._logger.error(reason if str(reason) else "Connection to AiPrintBox broker refused, unknown error")
 			return
 
-		self._logger.info("Connected to AiPrintBox")
+	#	self._logger.info("Connected to AiPrintBox")
 
-		printer_registered = self._settings.get_boolean(["registration_complete"])
-		if printer_registered:
+		printer_actived = self._settings.get_boolean(["active_complete"])
+		if printer_actived:
 			self._mqtt.subscribe("/printers/%s/controller" % self._settings.get(["printer_token"]))
 			self._logger.info("Subscribed to AiPrintBox printer topic:%s" % self._settings.get(["printer_token"]))
 
@@ -464,7 +525,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				displayName="AiPrintBox",
 				displayVersion=self._plugin_version,
 				type="github_release",
-				user="jneilliii",
+				user="springtiger",
 				repo="OctoPrint-AiPrintBox",
 				current=self._plugin_version,
 				pip="https://github.com/springtiger/aiprintbox/archive/{target_version}.zip"				
