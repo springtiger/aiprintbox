@@ -33,7 +33,7 @@ plugin_url = "https://github.com/springtiger/aiprintbox"
 plugin_license = "AGPLv3"
 
 # Any additional requirements besides OctoPrint should be listed here
-plugin_requires = ["OctoPrint>=1.3.5","paho-mqtt","trimesh"]
+plugin_requires = ["OctoPrint>=1.3.5","paho-mqtt","trimesh", "qrcode" ,"image" ]
 
 ### --------------------------------------------------------------------------------------------------------------------
 ### More advanced options that you usually shouldn't have to touch follow after this point

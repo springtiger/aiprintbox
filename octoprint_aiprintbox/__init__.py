@@ -171,7 +171,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				#MMF_UUID = "2576c5ea-78c9-44b0-ab56-3ebd88cc4ac0"	
 
 				self._settings.set(["printer_serial_number"],MMF_UUID)
-			# Make API call to AiPrintBox to generate QR code and register printer.
+
 			url = "%sprinterInfo/registerPrinterInfo?printerCode=%s&manufactor=%s&type=%s" % (self.server_host, self._settings.get(["printer_serial_number"]),data["manufacturer"],data["model"])
 			mac_address = ':'.join(("%012X" % get_mac())[i:i+2] for i in range(0, 12, 2))
 			payload = "{\"manufacturer\": \"%s\",\"model\": \"%s\",\"firmware_version\": \"%s\",\"serial_number\": \"%s\",\"mac_address\": \"%s\"}" % (data["manufacturer"],data["model"],"1.0.0",self._settings.get(["printer_serial_number"]),mac_address)
@@ -214,6 +214,13 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 					self._settings.set(["printer_token"],serialized_response["data"])
 					self._settings.set_boolean(["active_complete"], True)					
 					self._settings.save()
+
+					import qrcode
+					import image
+					img = qrcode.make(serialized_response["data"])
+					current_work_dir = os.path.dirname(__file__)
+					qrcode_path = os.path.join(current_work_dir, "token_qrcode.jpg")
+					img.save(qrcode_path)
 #					self.mqtt_connect()
 #					self.on_after_startup()
 				else:
@@ -465,6 +472,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 
 		except Exception as e:
+			self.mqtt_publish("%s/%s/response" % (pub_topic,restapi),str(e) )
 			self._logger.info("subscription message error:" + str(e))
 			self._plugin_manager.send_plugin_message(self._identifier, dict(message=str(e)))
 

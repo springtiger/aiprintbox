@@ -180,7 +180,7 @@ $(function() {
 		
 		self.onTabChange = function(current, previous) {
 				if (current === "#tab_plugin_aiprintbox") {
-					$('#aiprintbox_iframe').attr('src','https://www.AiPrintBox.com/');
+					$('#aiprintbox_iframe').attr('src','https://www.kucad.ltd/');
 				} else if (previous === "#tab_plugin_aiprintbox") {
 					$('#aiprintbox_iframe').attr('src','');
 				}
