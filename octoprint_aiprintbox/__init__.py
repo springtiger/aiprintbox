@@ -16,6 +16,7 @@ import octoprint.plugin
 import base64
 import trimesh
 import os
+import _thread
 
 class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 						  octoprint.plugin.EventHandlerPlugin,
@@ -43,6 +44,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 								"102":"paused",
 								"103":"resumed",
 								"104":"printing",
+								"201":"downloading",
 								"999":"offline"}
 
 	def initialize(self):
@@ -167,10 +169,17 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
     		# Generate serial number if it doesn't already exist.
 			if self._settings.get(["printer_serial_number"]) == "":
 				import uuid
-				MMF_UUID = str(uuid.uuid4())
-				#MMF_UUID = "2576c5ea-78c9-44b0-ab56-3ebd88cc4ac0"	
+				CM_UUID = str(uuid.uuid4())
+				#CM_UUID = "2576c5ea-78c9-44b0-ab56-3ebd88cc4ac0"	
 
-				self._settings.set(["printer_serial_number"],MMF_UUID)
+				self._settings.set(["printer_serial_number"],CM_UUID)
+				import qrcode
+				import image
+				img = qrcode.make(CM_UUID)
+				current_work_dir = os.path.dirname(__file__)
+				qrcode_path = os.path.join(current_work_dir, "static/images/cmid_qrcode.jpg")
+				img.save(qrcode_path)
+				
 
 			url = "%sprinterInfo/registerPrinterInfo?printerCode=%s&manufactor=%s&type=%s" % (self.server_host, self._settings.get(["printer_serial_number"]),data["manufacturer"],data["model"])
 			mac_address = ':'.join(("%012X" % get_mac())[i:i+2] for i in range(0, 12, 2))
@@ -214,13 +223,6 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 					self._settings.set(["printer_token"],serialized_response["data"])
 					self._settings.set_boolean(["active_complete"], True)					
 					self._settings.save()
-
-					import qrcode
-					import image
-					img = qrcode.make(serialized_response["data"])
-					current_work_dir = os.path.dirname(__file__)
-					qrcode_path = os.path.join(current_work_dir, "token_qrcode.jpg")
-					img.save(qrcode_path)
 #					self.mqtt_connect()
 #					self.on_after_startup()
 				else:
@@ -306,6 +308,8 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 			self._logger.debug(message)
 			self.mqtt_publish(topic,message)
+		self._logger.info('send status: ' + self._get_current_status())
+
 
 	def _get_current_status(self):
 		return self._printer_status[self._current_action_code]
@@ -313,9 +317,9 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 	def _get_timestamp(self):
 		timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 		return timestamp
-
+		
 	##~~ Printer Action Functions
-	def _download_file(self, data):
+	def _download_file(self, data,pub_topic,restapi,message):
 		try:
 			# Make API call to AiPrintBox to download gcode file.
 	#		payload = dict(file_id = action["file_id"],printer_token = self._settings.get(["printer_token"]))
@@ -328,6 +332,8 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 			self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
 #			if action["Request-Type"] == "get":
+
+			self._current_action_code = "201"
 			if action["type"] == "get":		
 				response = requests.get(url, params=payload, headers=headers)
 			else:
@@ -349,16 +355,23 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 					mesh.export(stl_download_file,"stl_ascii")
 					os.remove(download_file)
 
-				return dict(status_code = response.status_code,text = "File download successful.")
+				state = dict(status_code = response.status_code,text = "File download successful.")
 			else:
 				self._logger.debug("API Error: %s" % response)
 				self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
-				return dict(status_code = response.status_code,text = response.text)
+				state = dict(status_code = response.status_code,text = response.text)
 			
 		except Exception as e:
 			self._logger.info("download file error :"+ str(e))
 			self._plugin_manager.send_plugin_message(self._identifier,dict(error = str(e)))
-		return dict(status_code = 400,text = str(e))
+			state = dict(status_code = 400,text = str(e))
+
+		self._current_action_code = "000"
+		self.mqtt_publish("%s/%s/status" % (pub_topic,restapi), state["status_code"])
+		self.mqtt_publish("%s/%s/response" % (pub_topic,restapi), state["text"])
+		self._plugin_manager.send_plugin_message(self._identifier, dict(topic=restapi,message=message,subscribecommand="Status code: %s" % state["status_code"]))
+		
+#		return dict(status_code = 400,text = str(e))
 	##~~ MQTT Functions
 	def mqtt_connect(self):
 		# broker_url = "mqtt.AiPrintBox.com"
@@ -463,13 +476,14 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				self._plugin_manager.send_plugin_message(self._identifier, dict(topic=restapi,message=message,subscribecommand="Response: %s" % r.text))
 			if action["act_type"] == "download":
 				data = base64.b64decode(action["act_cmd"])		
+
+				_thread.start_new_thread(self._download_file,args=(data,pub_topic,restapi,message))
+				'''
 				r = self._download_file(data)
-				#data = base64.b64decode(action["act_cmd"]).encode("utf-8")			
-				#r = requests.post(url, data=data, headers=headers)
 				self.mqtt_publish("%s/%s/status" % (pub_topic,restapi), r["status_code"])
 				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi), r["text"])
 				self._plugin_manager.send_plugin_message(self._identifier, dict(topic=restapi,message=message,subscribecommand="Status code: %s" % r["status_code"]))
-
+				'''
 
 		except Exception as e:
 			self.mqtt_publish("%s/%s/response" % (pub_topic,restapi),str(e) )
