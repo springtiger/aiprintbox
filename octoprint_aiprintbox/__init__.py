@@ -123,7 +123,10 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			if event == Events.SLICING_DONE:
 				self._current_action_code = "302"	
 			if event == Events.SLICING_FAILED:
-				self._current_action_code = "303"			
+				self._current_action_code = "303"	
+
+
+			self._logger.info("receive info:" + str(event))
 		except Exception as e:
 			self._logger.info("on event error:" + str(e))
 			self._plugin_manager.send_plugin_message(self._identifier,dict(error=str(e)))
@@ -156,6 +159,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 		if self._settings.get_boolean(["active_complete"]) and self.mmf_status_updater is None:
 			# start repeated timer publishing current status_code
 			self.mmf_status_updater = RepeatedTimer(5,self.send_status)
+#			self.send_status()
 			self.mmf_status_updater.start()
 			return
 
@@ -304,6 +308,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			self._logger.debug("Error getting printers: %s" % response)
 
 	def send_status(self):
+#		self.mmf_status_updater.cancel()
 		printer_disconnected = self._printer.is_closed_or_error()
 		if not printer_disconnected:
 			printer_token = self._settings.get(["printer_token"]),
@@ -330,7 +335,8 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			self._logger.debug(message)
 			self.mqtt_publish(topic,message)
 		self._logger.info('send status: ' + self._get_current_status())
-
+#		if not self.mmf_status_updater._timer_active():
+#			self.mmf_status_updater.start()
 
 	def _get_current_status(self):
 		return self._printer_status[self._current_action_code]
@@ -345,35 +351,28 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			# Make API call to AiPrintBox to download gcode file.
 	#		payload = dict(file_id = action["file_id"],printer_token = self._settings.get(["printer_token"]))
 			action = json.loads(data)
-#			url = action["url"]
 			url = action["filePath"]
-			payload = "{\"Api-Key\": \"%s\"}" % action["key"]
 			headers = {'X-Api-Key': self._settings.get(["client_key"])}
 			fileName = action["fileName"]
 
-			self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
-#			if action["Request-Type"] == "get":
-
 			self._current_action_code = "201"
 			if action["type"] == "get":		
+				payload = "{\"Api-Key\": \"%s\"}" % action["key"]
 				response = requests.get(url, params=payload, headers=headers)
 			else:
+				payload = "key=%s" % action["key"]
 				response = requests.post(url, params=payload, headers=headers)
 
+			self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
 			if response.status_code == 200:
 				# Save file to uploads folder
 				sanitize_file_name = self._file_manager.sanitize_name("local",fileName)
 				download_file = "%s/%s" % (self._settings.global_get_basefolder("uploads"),sanitize_file_name)
 				self._logger.debug("Saving file: %s" % download_file)
 
-				if isinstance(response.text,basestring):
-					with open(download_file, 'w') as f:
-						f.write(response.text)
-						f.close()
-				else:
-					with open(download_file, 'wb') as f:
-						f.write(response.text)
-						f.close()
+				with open(download_file, 'wb') as f:
+					f.write(response.content)
+					f.close()
 
 				if download_file.endswith(".obj"):					
 					mesh = trimesh.load_mesh(download_file)
@@ -513,6 +512,12 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi),'reset access point. please wait a moment......')
 				url = "http://%s:%s/%s" % (address,8025,'setHotPoint')
 				r = requests.get(url, headers=headers)
+
+			if action["act_type"] == "delete":
+				r = requests.delete(url,headers = headers)
+				self.mqtt_publish("%s/%s/status" % (pub_topic,restapi), r.status_code)
+				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi), r.text)
+				self._plugin_manager.send_plugin_message(self._identifier, dict(topic=restapi,message=message,subscribecommand="Response: %s" % r.text))
 
 		except Exception as e:
 			self.mqtt_publish("%s/%s/response" % (pub_topic,restapi),str(e) )
