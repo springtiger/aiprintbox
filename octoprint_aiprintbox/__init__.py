@@ -356,12 +356,11 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			fileName = action["fileName"]
 
 			self._current_action_code = "201"
-			if action["type"] == "get":		
-				payload = "{\"Api-Key\": \"%s\"}" % action["key"]
-				response = requests.get(url, params=payload, headers=headers)
-			else:
-				payload = "key=%s" % action["key"]
-				response = requests.post(url, params=payload, headers=headers)
+			payload = "key=%s" % action["key"]
+#			if action["type"] == "get":		
+			response = requests.get(url, params=payload, headers=headers)
+#			else:
+#				response = requests.post(url, params=payload, headers=headers)
 
 			self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
 			if response.status_code == 200:
