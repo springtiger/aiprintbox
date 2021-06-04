@@ -242,8 +242,21 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 					self._settings.set(["printer_token"],serialized_response["data"])
 					self._settings.set_boolean(["active_complete"], True)					
 					self._settings.save()
-#					self.mqtt_connect()
-#					self.on_after_startup()
+					'''
+					count = 10
+					while count > 0:
+						try:
+							address = "localhost"
+							port = 8025
+							url = "http://%s:%s/%s" % (address,port,'updateResolv')
+							requests.get(url)
+							time.sleep(3)
+							print(url)
+							break
+						except:
+							count = count - 1
+							continue
+					'''
 				else:
 					self._settings.set_boolean(["active_complete"], False)	
 			else:
@@ -326,9 +339,11 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 						   current_task_id = self._current_task_id,
 						   temperature = "%s" % self._current_temp_hotend,
 						   bed_temperature = "%s" % self._current_temp_bed,
-						   print_progress = int(printer_data["progress"]["completion"] or 0),
-						   remaining_time = int(printer_data["progress"]["printTimeLeft"] or 0),
-						   total_time = int(printer_data["job"]["estimatedPrintTime"] or 0),
+						   print_progress = printer_data["progress"],
+						   #print_time = int(printer_data["progress"]["printTime"] or 0),
+						   #print_progress = int(printer_data["progress"]["completion"] or 0),
+						   #remaining_time = int(printer_data["progress"]["printTimeLeft"] or 0),
+						   #total_time = int(printer_data["job"]["estimatedPrintTime"] or 0),
 						   date = self._get_timestamp()
 						   ) 
 
@@ -357,10 +372,8 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 
 			self._current_action_code = "201"
 			payload = "key=%s" % action["key"]
-#			if action["type"] == "get":		
+
 			response = requests.get(url, params=payload, headers=headers)
-#			else:
-#				response = requests.post(url, params=payload, headers=headers)
 
 			self._logger.debug("Sending parameters: %s with header: %s" % (payload,headers))
 			if response.status_code == 200:
@@ -379,7 +392,7 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 					mesh.export(stl_download_file,"stl_ascii")
 					os.remove(download_file)
 
-				state = dict(status_code = response.status_code,text = "File download successful.")
+				state = dict(status_code = response.status_code,text = "successful")
 			else:
 				self._logger.debug("API Error: %s" % response)
 				self._plugin_manager.send_plugin_message(self._identifier, dict(error=response.status_code))
@@ -510,6 +523,11 @@ class AiPrintBoxPlugin(octoprint.plugin.SettingsPlugin,
 			if action["act_type"] == "resetap":
 				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi),'reset access point. please wait a moment......')
 				url = "http://%s:%s/%s" % (address,8025,'setHotPoint')
+				r = requests.get(url, headers=headers)
+
+			if action["act_type"] == "update_resolv":
+				self.mqtt_publish("%s/%s/response" % (pub_topic,restapi),'update resolv configuration......')
+				url = "http://%s:%s/%s" % (address,8025,'updateResolv')
 				r = requests.get(url, headers=headers)
 
 			if action["act_type"] == "delete":
